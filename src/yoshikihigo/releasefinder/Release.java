@@ -1,3 +1,4 @@
+package yoshikihigo.releasefinder;
 public class Release implements Comparable<Release> {
 
 	final public String name;

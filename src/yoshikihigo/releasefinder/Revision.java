@@ -1,3 +1,4 @@
+package yoshikihigo.releasefinder;
 public class Revision implements Comparable<Revision> {
 
 	final public long number;

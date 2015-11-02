@@ -1,3 +1,4 @@
+package yoshikihigo.releasefinder;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.Option;
