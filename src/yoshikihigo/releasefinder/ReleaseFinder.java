@@ -76,7 +76,10 @@ public class ReleaseFinder {
 			final Set<Long> malformedRevisions, final long rev1, final long rev2)
 			throws SVNException {
 
-		System.out.println("START: " + rev1 + "--" + rev2);
+		if (RFConfig.getInstance().isVERBOSE()) {
+			System.out.println("START: " + rev1 + "--" + rev2);
+		}
+
 		if (rev1 == rev2) {
 			return rev1;
 		}
@@ -96,7 +99,10 @@ public class ReleaseFinder {
 			final Set<Long> malformedRevisions, final long rev1, final long rev2)
 			throws SVNException {
 
-		System.out.println("END: " + rev1 + "--" + rev2);
+		if (RFConfig.getInstance().isVERBOSE()) {
+			System.out.println("END: " + rev1 + "--" + rev2);
+		}
+
 		if (rev1 == rev2) {
 			return rev1;
 		}
@@ -115,7 +121,11 @@ public class ReleaseFinder {
 	private SortedSet<Release> findRelease(final SVNDiffClient diffClient,
 			final SVNURL url, final long startrev, final long endrev)
 			throws SVNException {
-		System.out.println(startrev + " : " + endrev);
+		
+		if (RFConfig.getInstance().isVERBOSE()) {
+			System.out.println("MAIN: " + startrev + " : " + endrev);
+		}
+		
 		final SortedSet<Release> releases = new TreeSet<>();
 
 		final long delta = endrev - startrev;
