@@ -1,4 +1,5 @@
 package yoshikihigo.releasefinder;
+
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.Option;
@@ -30,7 +31,16 @@ public class RFConfig {
 		{
 			final Option output = new Option("o", "output", true,
 					"output file in CSV format");
-			output.setArgName("number");
+			output.setArgName("file");
+			output.setArgs(1);
+			output.setRequired(false);
+			options.addOption(output);
+		}
+
+		{
+			final Option output = new Option("m", "malformed", true,
+					"list of malformed revisions");
+			output.setArgName("file");
 			output.setArgs(1);
 			output.setRequired(false);
 			options.addOption(output);
@@ -110,6 +120,18 @@ public class RFConfig {
 			System.exit(0);
 		}
 		return this.commandLine.getOptionValue("o");
+	}
+
+	public boolean hasMALFORMED() {
+		return this.commandLine.hasOption("m");
+	}
+
+	public String getMALFORMED() {
+		if (!this.commandLine.hasOption("m")) {
+			System.err.println("option \"m\" is not specified.");
+			System.exit(0);
+		}
+		return this.commandLine.getOptionValue("m");
 	}
 
 	public boolean hasSTARTREV() {

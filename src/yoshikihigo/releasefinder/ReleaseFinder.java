@@ -1,12 +1,17 @@
 package yoshikihigo.releasefinder;
+
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.StringReader;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
@@ -51,43 +56,108 @@ public class ReleaseFinder {
 			final SVNDiffClient diffClient = SVNClientManager.newInstance()
 					.getDiffClient();
 
-			final SVNRepository svnRepository = FSRepositoryFactory.create(url);
-			final long latestRevision = svnRepository.getLatestRevision();
+			final SVNRepository repo = FSRepositoryFactory.create(url);
+			final long latestrev = repo.getLatestRevision();
+			final Set<Long> malformedRevs = getMalformedRevisions();
 
-			for (long r = 0; r < latestRevision; r++) {
-
-				final SVNNodeKind status = svnRepository.checkPath("", r);
-				if (status == SVNNodeKind.NONE) {
-					continue;
-				}
-
-				final SVNRevision rev1 = SVNRevision.create(r);
-				final SVNRevision rev2 = SVNRevision.create(r + 1);
-				diffClient.doDiffStatus(url, rev1, url, rev2,
-						SVNDepth.INFINITY, true, new ISVNDiffStatusHandler() {
-
-							@Override
-							public void handleDiffStatus(
-									final SVNDiffStatus status) {
-
-								if (SVNStatusType.STATUS_ADDED == status
-										.getModificationType()) {
-									if (!status.getPath().contains("/")) {
-										final Revision revision = getRevision(rev1
-												.getNumber());
-										final String name = status.getPath();
-										final Release release = new Release(
-												name, revision);
-										releases.add(release);
-									}
-								}
-							}
-						});
-			}
+			final long startrev = this.identifyStartRevision(repo,
+					malformedRevs, 0, latestrev);
+			final long endrev = this.identifyEndRevision(repo, malformedRevs,
+					0, latestrev);
+			releases.addAll(this.findRelease(diffClient, url, startrev, endrev));
 
 		} catch (final SVNException e) {
 			e.printStackTrace();
 		}
+		return releases;
+	}
+
+	private long identifyStartRevision(final SVNRepository repository,
+			final Set<Long> malformedRevisions, final long rev1, final long rev2)
+			throws SVNException {
+
+		System.out.println("START: " + rev1 + "--" + rev2);
+		if (rev1 == rev2) {
+			return rev1;
+		}
+
+		final long midium = (rev1 + rev2) / 2;
+		final SVNNodeKind status = repository.checkPath("", midium);
+		if (status != SVNNodeKind.NONE) {
+			return this.identifyStartRevision(repository, malformedRevisions,
+					rev1, midium);
+		} else {
+			return this.identifyStartRevision(repository, malformedRevisions,
+					midium + 1, rev2);
+		}
+	}
+
+	private long identifyEndRevision(final SVNRepository repository,
+			final Set<Long> malformedRevisions, final long rev1, final long rev2)
+			throws SVNException {
+
+		System.out.println("END: " + rev1 + "--" + rev2);
+		if (rev1 == rev2) {
+			return rev1;
+		}
+
+		final long midium = (rev1 + rev2) / 2;
+		final SVNNodeKind status = repository.checkPath("", midium);
+		if (status == SVNNodeKind.NONE) {
+			return this.identifyEndRevision(repository, malformedRevisions,
+					rev1, midium);
+		} else {
+			return this.identifyEndRevision(repository, malformedRevisions,
+					midium + 1, rev2);
+		}
+	}
+
+	private SortedSet<Release> findRelease(final SVNDiffClient diffClient,
+			final SVNURL url, final long startrev, final long endrev)
+			throws SVNException {
+		System.out.println(startrev + " : " + endrev);
+		final SortedSet<Release> releases = new TreeSet<>();
+
+		final long delta = endrev - startrev;
+		if (delta < 1) {
+			return releases;
+		}
+
+		final SVNRevision rev1 = SVNRevision.create(startrev);
+		final SVNRevision rev2 = SVNRevision.create(endrev);
+
+		diffClient.doDiffStatus(url, rev1, url, rev2, SVNDepth.IMMEDIATES,
+				false, new ISVNDiffStatusHandler() {
+
+					@Override
+					public void handleDiffStatus(final SVNDiffStatus status) {
+
+						if (SVNStatusType.STATUS_ADDED == status
+								.getModificationType()) {
+							if (!status.getPath().contains("/")) {
+								final Revision revision = (1 == delta) ? getRevision(rev1
+										.getNumber()) : new Revision(startrev,
+										"", "", "");
+								final String name = status.getPath();
+								final Release release = new Release(name,
+										revision);
+								releases.add(release);
+							}
+						}
+					}
+				});
+
+		if ((1 < delta) && !releases.isEmpty()) {
+			releases.clear();
+			final long medium = (startrev + endrev) / 2;
+			final SortedSet<Release> releases1 = this.findRelease(diffClient,
+					url, startrev, medium);
+			releases.addAll(releases1);
+			final SortedSet<Release> releases2 = this.findRelease(diffClient,
+					url, medium, endrev);
+			releases.addAll(releases2);
+		}
+
 		return releases;
 	}
 
@@ -114,7 +184,9 @@ public class ReleaseFinder {
 							revisions.add(revision);
 						}
 					});
-		} catch (final SVNException e) {
+		}
+
+		catch (final SVNException e) {
 			e.printStackTrace();
 			System.exit(0);
 		}
@@ -178,5 +250,32 @@ public class ReleaseFinder {
 
 		text.append("\"");
 		return text.toString();
+	}
+
+	private Set<Long> getMalformedRevisions() {
+		final Set<Long> malformed = new HashSet<>();
+
+		if (RFConfig.getInstance().hasMALFORMED()) {
+			final String path = RFConfig.getInstance().getMALFORMED();
+			try (final BufferedReader reader = new BufferedReader(
+					new FileReader(path))) {
+
+				while (true) {
+					final String line = reader.readLine();
+					if (null == line) {
+						break;
+					}
+
+					final long revision = Long.parseLong(line);
+					malformed.add(revision);
+				}
+
+			} catch (final IOException e) {
+				e.printStackTrace();
+				System.exit(0);
+			}
+		}
+
+		return malformed;
 	}
 }
