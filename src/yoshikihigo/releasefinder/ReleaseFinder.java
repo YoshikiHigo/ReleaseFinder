@@ -218,9 +218,9 @@ public class ReleaseFinder {
 				writer.write(release.name);
 				writer.write(", ");
 				writer.write(Long.toString(release.revision.number));
-				writer.write(", ");
+				writer.write(", \"");
 				writer.write(release.revision.date);
-				writer.write(", ");
+				writer.write("\", ");
 				final String author = release.revision.author;
 				writer.write((null != author) ? author : "no-info");
 				writer.write(", ");
