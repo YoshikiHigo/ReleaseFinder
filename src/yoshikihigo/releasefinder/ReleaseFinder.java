@@ -7,10 +7,12 @@ import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
-import java.io.StringReader;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
@@ -19,6 +21,7 @@ import org.tmatesoft.svn.core.ISVNLogEntryHandler;
 import org.tmatesoft.svn.core.SVNDepth;
 import org.tmatesoft.svn.core.SVNException;
 import org.tmatesoft.svn.core.SVNLogEntry;
+import org.tmatesoft.svn.core.SVNLogEntryPath;
 import org.tmatesoft.svn.core.SVNNodeKind;
 import org.tmatesoft.svn.core.SVNURL;
 import org.tmatesoft.svn.core.internal.io.fs.FSRepositoryFactory;
@@ -37,11 +40,16 @@ public class ReleaseFinder {
 		RFConfig.initialize(args);
 
 		final ReleaseFinder finder = new ReleaseFinder();
-		final SortedSet<Release> releases = finder.findRelease();
+		final SortedSet<Release> tagReleases = finder.findRelease("tags");
+		final SortedSet<Release> branchReleases = finder
+				.findRelease("branches");
+		final SortedSet<Release> releases = new TreeSet<Release>();
+		releases.addAll(tagReleases);
+		releases.addAll(branchReleases);
 		finder.write(releases);
 	}
 
-	public SortedSet<Release> findRelease() {
+	public SortedSet<Release> findRelease(final String type) {
 
 		final SortedSet<Release> releases = new TreeSet<Release>();
 
@@ -51,7 +59,7 @@ public class ReleaseFinder {
 			final boolean isVerbose = RFConfig.getInstance().isVERBOSE();
 
 			final SVNURL url = SVNURL.fromFile(new File(repository
-					+ System.getProperty("file.separator") + "tags"));
+					+ System.getProperty("file.separator") + type));
 			FSRepositoryFactory.setup();
 			final SVNDiffClient diffClient = SVNClientManager.newInstance()
 					.getDiffClient();
@@ -63,8 +71,9 @@ public class ReleaseFinder {
 			final long startrev = this.identifyStartRevision(repo,
 					malformedRevs, 0, latestrev);
 			final long endrev = this.identifyEndRevision(repo, malformedRevs,
-					0, latestrev);
-			releases.addAll(this.findRelease(diffClient, url, startrev, endrev));
+					startrev, latestrev);
+			releases.addAll(this.findRelease(repo, diffClient, url, startrev,
+					endrev, type));
 
 		} catch (final SVNException e) {
 			e.printStackTrace();
@@ -80,7 +89,7 @@ public class ReleaseFinder {
 			System.out.println("START: " + rev1 + "--" + rev2);
 		}
 
-		if (rev1 == rev2) {
+		if (rev2 == rev1) {
 			return rev1;
 		}
 
@@ -118,14 +127,15 @@ public class ReleaseFinder {
 		}
 	}
 
-	private SortedSet<Release> findRelease(final SVNDiffClient diffClient,
-			final SVNURL url, final long startrev, final long endrev)
+	private SortedSet<Release> findRelease(final SVNRepository repository,
+			final SVNDiffClient diffClient, final SVNURL url,
+			final long startrev, final long endrev, final String type)
 			throws SVNException {
-		
+
 		if (RFConfig.getInstance().isVERBOSE()) {
 			System.out.println("MAIN: " + startrev + " : " + endrev);
 		}
-		
+
 		final SortedSet<Release> releases = new TreeSet<>();
 
 		final long delta = endrev - startrev;
@@ -133,64 +143,77 @@ public class ReleaseFinder {
 			return releases;
 		}
 
+		if ((SVNNodeKind.NONE == repository.checkPath("", startrev))
+				|| (SVNNodeKind.NONE == repository.checkPath("", endrev))) {
+			return releases;
+		}
+
 		final SVNRevision rev1 = SVNRevision.create(startrev);
 		final SVNRevision rev2 = SVNRevision.create(endrev);
-
 		diffClient.doDiffStatus(url, rev1, url, rev2, SVNDepth.IMMEDIATES,
 				false, new ISVNDiffStatusHandler() {
 
 					@Override
 					public void handleDiffStatus(final SVNDiffStatus status) {
 
-						if (SVNStatusType.STATUS_ADDED == status
+						if (SVNStatusType.STATUS_ADDED != status
 								.getModificationType()) {
-							if (!status.getPath().contains("/")) {
-								final Revision revision = (1 == delta) ? getRevision(rev1
-										.getNumber()) : new Revision(startrev,
-										"", "", "");
-								final String name = status.getPath();
-								final Release release = new Release(name,
-										revision);
-								releases.add(release);
-							}
+							return;
 						}
+
+						final String path = status.getPath();
+						System.out.println(delta + " : " + startrev + " : "
+								+ endrev + " : " + path);
+						final Revision revision = (1 == delta) ? getRevision(
+								url, startrev, path) : new Revision(startrev,
+								"", null, -1, "", "");
+						final Release release = new Release(path, type,
+								revision);
+						releases.add(release);
 					}
 				});
 
 		if ((1 < delta) && !releases.isEmpty()) {
 			releases.clear();
 			final long medium = (startrev + endrev) / 2;
-			final SortedSet<Release> releases1 = this.findRelease(diffClient,
-					url, startrev, medium);
+			final SortedSet<Release> releases1 = this.findRelease(repository,
+					diffClient, url, startrev, medium, type);
 			releases.addAll(releases1);
-			final SortedSet<Release> releases2 = this.findRelease(diffClient,
-					url, medium, endrev);
+			final SortedSet<Release> releases2 = this.findRelease(repository,
+					diffClient, url, medium, endrev, type);
 			releases.addAll(releases2);
 		}
 
 		return releases;
 	}
 
-	private Revision getRevision(final long number) {
+	private Revision getRevision(final SVNURL url, final long number,
+			final String path) {
 
 		final List<Revision> revisions = new ArrayList<>();
 
 		try {
-			final String repository = RFConfig.getInstance().getREPOSITORY();
-			final SVNURL url = SVNURL.fromFile(new File(repository));
 			FSRepositoryFactory.setup();
 			final SVNRepository svnRepository = FSRepositoryFactory.create(url);
 
-			svnRepository.log(null, number, number + 1, true, true,
-					new ISVNLogEntryHandler() {
+			svnRepository.log(new String[] { path }, number, number + 1, true,
+					true, new ISVNLogEntryHandler() {
+
 						@Override
 						public void handleLogEntry(SVNLogEntry logEntry)
 								throws SVNException {
+							final Entry<String, SVNLogEntryPath> shortestPathEntry = getShortestLogEntryPath(logEntry
+									.getChangedPaths());
 							final String date = logEntry.getDate().toString();
+							final String copyPath = shortestPathEntry
+									.getValue().getCopyPath();
+							final long copyRevision = shortestPathEntry
+									.getValue().getCopyRevision();
 							final String author = logEntry.getAuthor();
 							final String message = logEntry.getMessage();
 							final Revision revision = new Revision(number,
-									date, author, message);
+									date, copyPath, copyRevision, author,
+									message);
 							revisions.add(revision);
 						}
 					});
@@ -204,27 +227,29 @@ public class ReleaseFinder {
 		return revisions.get(0);
 	}
 
-	private void write(final SortedSet<Release> releases) {
+	private Entry<String, SVNLogEntryPath> getShortestLogEntryPath(
+			final Map<String, SVNLogEntryPath> paths) {
+		final List<Entry<String, SVNLogEntryPath>> list = new ArrayList<>(
+				paths.entrySet());
+		Collections.sort(
+				list,
+				(e1, e2) -> Integer.valueOf(e1.getKey().length()).compareTo(
+						Integer.valueOf(e2.getKey().length())));
+		return list.get(0);
+	}
+
+	private void write(final SortedSet<Release> tagReleases) {
 
 		final String output = RFConfig.getInstance().getOUTPUT();
 
 		try (final BufferedWriter writer = new BufferedWriter(
 				new OutputStreamWriter(new FileOutputStream(output), "UTF-8"))) {
 
-			writer.write("NAME, REVISION, DATE, AUTHOR, LOG");
+			writer.write("NAME, REVISION, TYPE, DATE, COPY_PATH, COPY_REVISION, AUTHOR, LOG");
 			writer.newLine();
-
-			for (final Release release : releases) {
-				writer.write(release.name);
-				writer.write(", ");
-				writer.write(Long.toString(release.revision.number));
-				writer.write(", \"");
-				writer.write(release.revision.date);
-				writer.write("\", ");
-				final String author = release.revision.author;
-				writer.write((null != author) ? author : "no-info");
-				writer.write(", ");
-				writer.write(removeLineSeparator(release.revision.message));
+			for (final Release release : tagReleases) {
+				final String line = release.makeCSVLine();
+				writer.write(line);
 				writer.newLine();
 			}
 		}
@@ -233,33 +258,6 @@ public class ReleaseFinder {
 			e.printStackTrace();
 			System.exit(0);
 		}
-
-	}
-
-	private String removeLineSeparator(final String string) {
-		final StringBuilder text = new StringBuilder();
-		text.append("\"");
-
-		try (final BufferedReader reader = new BufferedReader(new StringReader(
-				string))) {
-			while (true) {
-				final String line = reader.readLine();
-				if (null == line) {
-					break;
-				}
-
-				text.append(line);
-				text.append(" ");
-			}
-		}
-
-		catch (final Exception e) {
-			e.printStackTrace();
-			System.exit(0);
-		}
-
-		text.append("\"");
-		return text.toString();
 	}
 
 	private Set<Long> getMalformedRevisions() {
